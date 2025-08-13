@@ -1,0 +1,199 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Runner Mágico</title>
+  <style>
+    body {
+      margin: 0;
+      background: #4e54c8;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      min-height: 100vh;
+      font-family: system-ui, sans-serif;
+    }
+    .toolbar { margin: 12px; display: flex; gap: 12px; align-items: center; color: #fff; }
+    #testlog { background: rgba(0,0,0,.25); padding: 6px 10px; border-radius: 8px; font-size: 12px; max-width: 900px; color:#fff; }
+    .overlay { position: relative; width: 900px; height: 340px; }
+    canvas {
+      background: url('fondo.avif') center/cover no-repeat;
+      border: 2px solid #ccc;
+      border-radius: 10px;
+      box-shadow: 0 10px 20px rgba(0,0,0,.15);
+      width: 900px; height: 340px;
+    }
+    /* Botón grande de reinicio (solo al perder) */
+    #bigReset {
+      position: absolute; left: 50%; top: 50%; transform: translate(-50%, -50%);
+      display: none;
+      padding: 18px 28px; font-size: 22px; font-weight: 700;
+      border: 0; border-radius: 12px; background: #ff6f91; color: #fff;
+      box-shadow: 0 8px 18px rgba(0,0,0,.2); cursor: pointer;
+    }
+  </style>
+</head>
+<body>
+  <div class="toolbar">
+    <span>Controles: <b>Espacio / Clic</b> para saltar</span>
+    <ul id="testlog"></ul>
+  </div>
+
+  <div class="overlay">
+    <canvas id="game" width="900" height="340"></canvas>
+    <button id="bigReset">🔁 Reiniciar</button>
+  </div>
+
+  <script>
+    // ----------------------- Utilidades de dibujo seguras -----------------------
+    function canDrawImage(img){
+      return !!(img && img.complete && img.naturalWidth > 0 && img.naturalHeight > 0);
+    }
+    function safeDrawImage(ctx, img, x, y, w, h){
+      if (canDrawImage(img)) { ctx.drawImage(img, x, y, w, h); return true; }
+      return false;
+    }
+    function drawPlaceholderPlayer(ctx, p){
+      // Personaje de reserva (por si la imagen falla): cuerpo redondeado con cara
+      ctx.save();
+      ctx.translate(p.x, p.y);
+      const r = 18;
+      ctx.fillStyle = '#3b3b98';
+      roundRect(ctx, 0, 0, p.w, p.h, r);
+      ctx.fill();
+      // barriga
+      ctx.fillStyle = '#f5f6fa';
+      ctx.beginPath(); ctx.ellipse(p.w*0.5, p.h*0.62, p.w*0.26, p.h*0.18, 0, 0, Math.PI*2); ctx.fill();
+      // ojos
+      ctx.fillStyle = '#fff';
+      ctx.beginPath(); ctx.ellipse(p.w*0.38, p.h*0.28, 10, 8, 0, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.ellipse(p.w*0.62, p.h*0.28, 10, 8, 0, 0, Math.PI*2); ctx.fill();
+      ctx.fillStyle = '#000';
+      ctx.beginPath(); ctx.arc(p.w*0.38, p.h*0.30, 3, 0, Math.PI*2); ctx.fill();
+      ctx.beginPath(); ctx.arc(p.w*0.62, p.h*0.30, 3, 0, Math.PI*2); ctx.fill();
+      // sonrisa
+      ctx.strokeStyle = '#000'; ctx.lineWidth = 2;
+      ctx.beginPath(); ctx.arc(p.w*0.5, p.h*0.42, 16, 0.15*Math.PI, 0.85*Math.PI); ctx.stroke();
+      ctx.restore();
+    }
+    function roundRect(ctx, x, y, w, h, r){
+      const rr = Math.min(r, w/2, h/2);
+      ctx.beginPath();
+      ctx.moveTo(x+rr, y);
+      ctx.arcTo(x+w, y, x+w, y+h, rr);
+      ctx.arcTo(x+w, y+h, x, y+h, rr);
+      ctx.arcTo(x, y+h, x, y, rr);
+      ctx.arcTo(x, y, x+w, y, rr);
+      ctx.closePath();
+    }
+
+    // ----------------------- Juego -----------------------
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const bigResetBtn = document.getElementById('bigReset');
+    const logEl = document.getElementById('testlog');
+
+    const W = canvas.width, H = canvas.height;
+    const G = 0.6;               // gravedad
+    const JUMP_VY = -18;         // salto alto y duradero
+    const FLOOR_Y = H - 180;     // altura del "suelo"
+    const SPEED_START = 1.5;     // velocidad base
+
+    let state = { started: false, gameOver: false, score: 0, speed: SPEED_START, obstacles: [] };
+
+    // Carga del sprite fijo con control de errores
+    const playerSprite = new Image();
+    playerSprite.onload = () => { log('Sprite cargado ✅'); };
+    playerSprite.onerror = () => { log('Sprite no encontrado. Se usará el placeholder. ⚠️'); };
+    playerSprite.src = 'personaje.jpg';
+
+    const player = { x: 90, y: FLOOR_Y, w: 150, h: 160, vy: 0, onGround: true };
+
+    function resetGame(){
+      state = { started: false, gameOver: false, score: 0, speed: SPEED_START, obstacles: [] };
+      player.y = FLOOR_Y; player.vy = 0; player.onGround = true;
+      bigResetBtn.style.display = 'none';
+    }
+    bigResetBtn.addEventListener('click', resetGame);
+
+    function jump(){
+      if(state.gameOver) return;
+      if (player.onGround) { player.vy = JUMP_VY; player.onGround = false; state.started = true; }
+    }
+    document.addEventListener('keydown', e => { if (e.code === 'Space') { e.preventDefault(); jump(); }});
+    canvas.addEventListener('pointerdown', jump);
+
+    function spawnObstacle(){
+      const size = 50;
+      state.obstacles.push({ x: W + 10, y: FLOOR_Y + (player.h - size), w: size, h: size });
+    }
+
+    let spawnTimer = 0;
+    function update(dt){
+      if(!state.started || state.gameOver) return;
+      // física salto
+      player.vy += G * dt;
+      player.y += player.vy * dt;
+      if (player.y >= FLOOR_Y) { player.y = FLOOR_Y; player.vy = 0; player.onGround = true; }
+      // spawns espaciados
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) { spawnObstacle(); spawnTimer = 200 / state.speed; }
+      // mover obstáculos y colisión
+      for (let i = state.obstacles.length - 1; i >= 0; i--) {
+        const o = state.obstacles[i];
+        o.x -= state.speed * dt * 3;
+        if (o.x + o.w < 0) state.obstacles.splice(i, 1);
+        const collide = (player.x < o.x + o.w) && (player.x + player.w > o.x) && (player.y < o.y + o.h) && (player.y + player.h > o.y);
+        if (collide) state.gameOver = true;
+      }
+      state.score += 0.05 * dt;
+    }
+
+    function drawObstacle(o){
+      const grad = ctx.createRadialGradient(o.x+o.w/2, o.y+o.h/2, 2, o.x+o.w/2, o.y+o.h/2, o.w/2);
+      grad.addColorStop(0, '#ffff99');
+      grad.addColorStop(0.5, '#ff9900');
+      grad.addColorStop(1, '#cc3300');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(o.x + o.w/2, o.y + o.h/2, o.w/2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function draw(){
+      ctx.clearRect(0,0,W,H);
+      state.obstacles.forEach(drawObstacle);
+
+      // Intento seguro de dibujar el sprite; si falla, dibujo un placeholder
+      if (!safeDrawImage(ctx, playerSprite, player.x, player.y, player.w, player.h)) {
+        drawPlaceholderPlayer(ctx, player);
+      }
+
+      ctx.fillStyle = '#000';
+      ctx.font = 'bold 18px system-ui, sans-serif';
+      ctx.fillText(`Puntos: ${Math.floor(state.score)}`, 10, 24);
+
+      if (!state.started && !state.gameOver) {
+        ctx.font = '600 16px system-ui, sans-serif';
+        ctx.fillText('Presiona Espacio o Clic para iniciar', W/2 - 150, H/2);
+      }
+
+      if (state.gameOver) {
+        bigResetBtn.style.display = 'inline-block';
+      }
+    }
+
+    let last = performance.now();
+    function loop(now){
+      const dt = Math.min(32, now - last); last = now;
+      update(dt / 16.6667);
+      draw();
+      requestAnimationFrame(loop);
+    }
+    loop(last);
+
+
+  </script>
+</body>
+</html>
