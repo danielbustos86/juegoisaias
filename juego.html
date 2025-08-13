@@ -1,0 +1,104 @@
+<!doctype html>
+<html lang="es">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>Runner Mágico</title>
+  <style>
+    body {
+      margin: 0;
+      background: #4e54c8;
+      display: flex;
+      flex-direction: column;
+      align-items: center;
+      height: 100vh;
+      font-family: sans-serif;
+    }
+    canvas {
+      background: url('fondo.avif') center/cover no-repeat;
+      border: 2px solid #ccc;
+      border-radius: 8px;
+      margin-top: 20px;
+    }
+  </style>
+</head>
+<body>
+  <canvas id="game" width="900" height="340"></canvas>
+  <script>
+    const canvas = document.getElementById('game');
+    const ctx = canvas.getContext('2d');
+    const W = canvas.width, H = canvas.height;
+    const G = 0.6;
+    const JUMP_VY = -18;
+    const FLOOR_Y = H - 180;
+    const SPEED_START = 1.5;
+
+    let state = { started: false, gameOver: false, score: 0, speed: SPEED_START, obstacles: [] };
+    let playerSprite = new Image();
+    playerSprite.src = 'personaje.jpg';
+    let player = { x: 90, y: FLOOR_Y, w: 150, h: 160, vy: 0, onGround: true };
+
+    function jump() {
+      if (player.onGround) { player.vy = JUMP_VY; player.onGround = false; state.started = true; }
+    }
+
+    document.addEventListener('keydown', e => { if (e.code === 'Space') jump(); });
+    canvas.addEventListener('click', jump);
+
+    function spawnObstacle() {
+      const size = 50;
+      state.obstacles.push({ x: W + 10, y: FLOOR_Y + (player.h - size), w: size, h: size });
+    }
+
+    let spawnTimer = 0;
+    function update(dt) {
+      if (!state.started || state.gameOver) return;
+
+      player.vy += G * dt;
+      player.y += player.vy * dt;
+      if (player.y >= FLOOR_Y) { player.y = FLOOR_Y; player.vy = 0; player.onGround = true; }
+
+      spawnTimer -= dt;
+      if (spawnTimer <= 0) { spawnObstacle(); spawnTimer = 200 / state.speed; }
+
+      for (let i = state.obstacles.length - 1; i >= 0; i--) {
+        let o = state.obstacles[i];
+        o.x -= state.speed * dt * 3;
+        if (o.x + o.w < 0) state.obstacles.splice(i, 1);
+        if (o.x < player.x + player.w && o.x + o.w > player.x && o.y < player.y + player.h && o.y + o.h > player.y) state.gameOver = true;
+      }
+
+      state.score += 0.05 * dt;
+    }
+
+    function drawObstacle(o) {
+      const grad = ctx.createRadialGradient(o.x+o.w/2, o.y+o.h/2, 2, o.x+o.w/2, o.y+o.h/2, o.w/2);
+      grad.addColorStop(0, '#ffff99');
+      grad.addColorStop(0.5, '#ff9900');
+      grad.addColorStop(1, '#cc3300');
+      ctx.fillStyle = grad;
+      ctx.beginPath();
+      ctx.arc(o.x + o.w/2, o.y + o.h/2, o.w/2, 0, Math.PI * 2);
+      ctx.fill();
+    }
+
+    function draw() {
+      ctx.clearRect(0, 0, W, H);
+      state.obstacles.forEach(drawObstacle);
+      ctx.drawImage(playerSprite, player.x, player.y, player.w, player.h);
+      ctx.fillStyle = '#000'; ctx.fillText(`Puntos: ${Math.floor(state.score)}`, 10, 20);
+      if (!state.started) ctx.fillText('Presiona Espacio o Clic para iniciar', W/2 - 100, H/2);
+      if (state.gameOver) ctx.fillText('GAME OVER', W/2 - 40, H/2);
+    }
+
+    let last = performance.now();
+    function loop(now) {
+      let dt = Math.min(32, now - last); last = now;
+      update(dt / 16.6667);
+      draw();
+      requestAnimationFrame(loop);
+    }
+    loop(last);
+  </script>
+</body>
+</html>
